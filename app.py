@@ -31,51 +31,54 @@ client = OpenAI(api_key=api_key)
 def load_index_and_meta():
     st.info("📥 Downloading FAISS index from Hugging Face…")
 
-    try:
-        # Download index with progress
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            tmp_path = tmp.name
-            with requests.get(INDEX_URL, stream=True, timeout=60) as r:
-                r.raise_for_status()
-                total = int(r.headers.get("content-length", 0))
-                downloaded = 0
-                progress = st.progress(0)
-                for chunk in r.iter_content(chunk_size=8192):
-                    if chunk:
-                        tmp.write(chunk)
-                        downloaded += len(chunk)
-                        if total:
-                            progress.progress(min(downloaded / total, 1.0))
-        
-        # Read index after file is closed but still exists
-        index = faiss.read_index(tmp_path)
-        os.unlink(tmp_path)
+    # Download index with progress
+    with tempfile.NamedTemporaryFile() as tmp:
+        with requests.get(INDEX_URL, stream=True) as r:
+            r.raise_for_status()
+            total = int(r.headers.get("content-length", 0))
+            downloaded = 0
+            progress = st.progress(0)
+            for chunk in r.iter_content(chunk_size=8192):
+                if chunk:
+                    tmp.write(chunk)
+                    downloaded += len(chunk)
+                    if total:
+                        progress.progress(min(downloaded / total, 1.0))
+        index = faiss.read_index(tmp.name)
 
-        # Download metadata
-        st.info("📥 Downloading metadata…")
-        meta_resp = requests.get(META_URL, timeout=60)
-        meta_resp.raise_for_status()
-        metas = []
-        for i, line in enumerate(meta_resp.text.strip().splitlines()):
-            try:
-                metas.append(json.loads(line))
-            except json.JSONDecodeError as e:
-                st.warning(f"⚠️ Skipping malformed JSON at line {i+1}: {str(e)}")
-                continue
-        
-        st.success("✅ Index loaded successfully!")
-        return index, metas
+    # Download metadata with robust JSON parsing
+    st.info("📥 Downloading metadata…")
+    metas = []
+    skipped = 0
     
-    except requests.exceptions.HTTPError as e:
-        st.error(f"❌ HTTP Error: {e.response.status_code} - {e.response.reason}")
-        st.error(f"URL: {e.response.url}")
-        st.stop()
-    except requests.exceptions.Timeout:
-        st.error("❌ Download timed out. The files may be too large or the connection is slow.")
-        st.stop()
-    except Exception as e:
-        st.error(f"❌ Error loading index: {str(e)}")
-        st.stop()
+    try:
+        response = requests.get(META_URL, timeout=30)
+        response.raise_for_status()
+        lines = response.text.strip().splitlines()
+        
+        for line_num, line in enumerate(lines, 1):
+            if not line.strip():
+                continue
+            try:
+                meta = json.loads(line)
+                metas.append(meta)
+            except json.JSONDecodeError as e:
+                skipped += 1
+                if skipped <= 5:  # Show only first 5 warnings
+                    st.warning(f"⚠️ Skipping malformed JSON at line {line_num}: {str(e)[:80]}")
+                elif skipped == 6:
+                    st.warning(f"⚠️ ({skipped - 5} more malformed lines skipped...)")
+        
+        if skipped > 0:
+            st.info(f"✅ Loaded {len(metas)} records ({skipped} skipped)")
+        else:
+            st.success("✅ Index and metadata loaded successfully!")
+            
+    except requests.RequestException as e:
+        st.error(f"❌ Failed to download metadata: {e}")
+        raise
+    
+    return index, metas
 
 index, metas = load_index_and_meta()
 
@@ -100,9 +103,10 @@ def retrieve(query: str, k: int = TOP_K):
     for idx, score in zip(ids[0], scores[0]):
         if idx == -1:
             continue
-        meta = metas[idx].copy()
-        meta["score"] = float(score)
-        results.append(meta)
+        if idx < len(metas):  # Safety check
+            meta = metas[idx].copy()
+            meta["score"] = float(score)
+            results.append(meta)
     return results
 
 # ---------------------------
