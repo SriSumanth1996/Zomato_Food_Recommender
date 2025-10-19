@@ -1,0 +1,6 @@
+streamlit
+openai>=1.0.0
+faiss-cpu
+pandas
+numpy
+requests
