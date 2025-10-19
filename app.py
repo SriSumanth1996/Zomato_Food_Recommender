@@ -7,12 +7,14 @@ import requests
 import tempfile
 import streamlit as st
 from openai import OpenAI
+from huggingface_hub import hf_hub_download
 
 # ---------------------------
 # CONFIGURATION
 # ---------------------------
-INDEX_URL = "https://huggingface.co/datasets/SriSumanth/mumbai-zomato-cafe-index/resolve/main/faiss.index"
-META_URL  = "https://huggingface.co/datasets/SriSumanth/mumbai-zomato-cafe-index/resolve/main/metas.jsonl"
+REPO_ID = "SriSumanth/mumbai-zomato-cafe-index"
+INDEX_FILE = "faiss.index"
+META_FILE = "metas.jsonl"
 EMBED_MODEL = "text-embedding-3-large"
 CHAT_MODEL = "gpt-4o"
 TOP_K = 50   # Number of candidates retrieved before GPT filtering
@@ -31,45 +33,41 @@ client = OpenAI(api_key=api_key)
 def load_index_and_meta():
     st.info("📥 Downloading FAISS index from Hugging Face…")
 
-    # Download index with progress
-    index_path = None
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".index") as tmp:
-            index_path = tmp.name
-            with requests.get(INDEX_URL, stream=True) as r:
-                r.raise_for_status()
-                total = int(r.headers.get("content-length", 0))
-                downloaded = 0
-                progress = st.progress(0)
-                for chunk in r.iter_content(chunk_size=8192):
-                    if chunk:
-                        tmp.write(chunk)
-                        downloaded += len(chunk)
-                        if total:
-                            progress.progress(min(downloaded / total, 1.0))
-        
-        # Read index after file is closed and still exists
+        # Download FAISS index using Hugging Face Hub API
+        index_path = hf_hub_download(
+            repo_id=REPO_ID,
+            filename=INDEX_FILE,
+            repo_type="dataset",
+            cache_dir=tempfile.gettempdir()
+        )
         index = faiss.read_index(index_path)
 
-        # Download metadata
-        meta_response = requests.get(META_URL)
-        meta_response.raise_for_status()
+        # Download metadata using Hugging Face Hub API
+        meta_path = hf_hub_download(
+            repo_id=REPO_ID,
+            filename=META_FILE,
+            repo_type="dataset",
+            cache_dir=tempfile.gettempdir()
+        )
+        
+        # Parse metadata JSONL file
         metas = []
-        for line in meta_response.text.strip().splitlines():
-            line = line.strip()
-            if line:  # Skip empty lines
-                try:
-                    metas.append(json.loads(line))
-                except json.JSONDecodeError as e:
-                    st.warning(f"⚠️ Skipped malformed JSON line: {line[:50]}...")
-                    continue
+        with open(meta_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        metas.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+        
         st.success("✅ Index loaded successfully!")
         return index, metas
     
-    finally:
-        # Clean up temporary file
-        if index_path and os.path.exists(index_path):
-            os.remove(index_path)
+    except Exception as e:
+        st.error(f"❌ Error loading files: {str(e)}")
+        raise
 
 index, metas = load_index_and_meta()
 
