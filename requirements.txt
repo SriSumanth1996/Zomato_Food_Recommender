@@ -4,3 +4,4 @@ faiss-cpu
 pandas
 numpy
 requests
+huggingface-hub
