@@ -52,7 +52,17 @@ def load_index_and_meta():
         index = faiss.read_index(index_path)
 
         # Download metadata
-        metas = [json.loads(line) for line in requests.get(META_URL).text.strip().splitlines()]
+        meta_response = requests.get(META_URL)
+        meta_response.raise_for_status()
+        metas = []
+        for line in meta_response.text.strip().splitlines():
+            line = line.strip()
+            if line:  # Skip empty lines
+                try:
+                    metas.append(json.loads(line))
+                except json.JSONDecodeError as e:
+                    st.warning(f"⚠️ Skipped malformed JSON line: {line[:50]}...")
+                    continue
         st.success("✅ Index loaded successfully!")
         return index, metas
     
