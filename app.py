@@ -55,7 +55,13 @@ def load_index_and_meta():
         st.info("📥 Downloading metadata…")
         meta_resp = requests.get(META_URL, timeout=60)
         meta_resp.raise_for_status()
-        metas = [json.loads(line) for line in meta_resp.text.strip().splitlines()]
+        metas = []
+        for i, line in enumerate(meta_resp.text.strip().splitlines()):
+            try:
+                metas.append(json.loads(line))
+            except json.JSONDecodeError as e:
+                st.warning(f"⚠️ Skipping malformed JSON at line {i+1}: {str(e)}")
+                continue
         
         st.success("✅ Index loaded successfully!")
         return index, metas
